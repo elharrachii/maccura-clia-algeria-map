@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Maccura CLIA – Installations par wilaya (Algérie)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,'Microsoft YaHei',sans-serif;background:#fff}
+  #app{display:grid;grid-template-rows:auto 1fr;height:100%}
+  header{padding:10px 16px;border-bottom:1px solid #eee;background:#fafafa}
+  h1{margin:0;font-size:18px;font-weight:600}
+  .sub{color:#666;font-size:12px;margin-top:2px}
+  #map{width:100%;height:calc(100vh - 70px)}
+  .legend{position:absolute;bottom:16px;left:16px;background:rgba(255,255,255,.95);padding:10px 12px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.08);font-size:12px}
+  .legend .row{display:flex;align-items:center;gap:8px;margin:4px 0}
+  .legend .swatch{width:16px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,.1)}
+  .leaflet-popup-content{margin:8px 12px}
+  .popup-header{font-weight:700;margin-bottom:6px}
+  .labs-list{max-height:220px;overflow:auto;padding:8px;background:rgba(245,245,245,.7);border-radius:8px;border:1px dashed #ddd}
+  .labs-list ul{margin:0;padding-left:16px}
+  .labs-list li{margin:4px 0}
+  .footnote{font-size:11px;color:#777;margin-top:4px}
+  .controls{position:absolute;top:16px;right:16px;display:flex;gap:8px}
+  .btn{padding:8px 10px;border:1px solid #ddd;background:#fff;border-radius:8px;cursor:pointer;font-size:12px}
+  .btn:hover{background:#f2f2f2}
+  .loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .loading .box{background:rgba(255,255,255,.9);padding:10px 14px;border-radius:10px;border:1px solid #eee;box-shadow:0 8px 30px rgba(0,0,0,.08);font-size:13px}
+  .pill{display:inline-block;padding:2px 6px;border-radius:999px;background:#f0f7ff;border:1px solid #d8e8ff;font-size:11px;color:#0b67c2}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>CLIA Maccura – Installations en Algérie <span class="pill">auto‑actualisé</span></h1>
+    <div class="sub">Source: Google Sheet (CSV publié). Cliquez une wilaya pour voir la liste des labos.</div>
+  </header>
+  <div id="map"></div>
+  <div class="legend">
+    <div class="row"><span class="swatch" style="background:#e8f3ff"></span> 0</div>
+    <div class="row"><span class="swatch" style="background:#cfe1ff"></span> 1</div>
+    <div class="row"><span class="swatch" style="background:#a7c4ff"></span> 2–3</div>
+    <div class="row"><span class="swatch" style="background:#7aa3ff"></span> 4–6</div>
+    <div class="row"><span class="swatch" style="background:#4c82ff"></span> 7–10</div>
+    <div class="row"><span class="swatch" style="background:#1e63ff"></span> 11+</div>
+  </div>
+  <div class="controls">
+    <button class="btn" id="btnReset">Réinitialiser la vue</button>
+    <button class="btn" id="btnExport">Exporter la synthèse (CSV)</button>
+  </div>
+  <div class="loading" id="loading"><div class="box">Chargement…</div></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script>
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRij3XlvkSTPp5uLrK4Yvo1HLJbmZz1GrlrmdTsSYM8_TJ9s7LDtHdrnzAv95nc1yd18ks8hF6UQf9y/pub?gid=0&single=true&output=csv"; // déjà branché
+const GEOB_API = "https://www.geoboundaries.org/api/current/gbOpen/DZA/ADM1/";
+function colorFor(n){if(!n||n<=0)return"#e8f3ff";if(n===1)return"#cfe1ff";if(n<=3)return"#a7c4ff";if(n<=6)return"#7aa3ff";if(n<=10)return"#4c82ff";return"#1e63ff"}
+function normalizeName(s){return (s||"").toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").replace(/-/g," ").replace(/[^a-z\\u0621-\\u064A\\s]/g,"").replace(/\\s+/g," ").trim()}
+const NAME_ALIASES={
+  "alger":["algiers"],
+  "el oued":["eloued","el ouedh"],
+  "tamanrasset":["tamenghasset","tamanghasset"],
+  "bejaia":["béjaia","bugia"].map(normalizeName),
+  "bechar":["béchar"].map(normalizeName),
+  "tizi ouzou":["tizi-ouzou"].map(normalizeName),
+  "m'sila":["msila","m sila"].map(normalizeName),
+  "el m'ghair":["el mghair","elmghair","el-meghaier"].map(normalizeName),
+  "el meniaa":["el menéa","el-menia","el menea","el menéa"].map(normalizeName),
+  "timimoun":["timimoune"].map(normalizeName),
+  "bordj badji mokhtar":["bordj badji mokhtar"].map(normalizeName),
+  "djanet":["janet"].map(normalizeName),
+  "beni abbes":["béni abbes","beni abbès"].map(normalizeName),
+  "in salah":["ain salah","ain-salah"].map(normalizeName),
+  "in guezzam":["ain guezzam","ain-guezzam","inguezzam"].map(normalizeName)
+};
+function aliasMatch(a,b){const A=normalizeName(a),B=normalizeName(b);if(A===B)return true;for(const[k,arr]of Object.entries(NAME_ALIASES)){const n=normalizeName(k);const all=new Set([n,...(arr||[])]);if(all.has(A)&&all.has(B))return true}return false}
+function aggregate(rows){const out={};rows.forEach(r=>{const wil=(r.Wilaya||r.wilaya||r.WILAYA||"").toString().trim();const lab=(r.Labo||r.Client||r.Laboratoire||r.Lab||"").toString().trim();const n=Number((r.Machines||r.Nb_Machines||r.Nombre||"1").toString().replace(",","."))||1;if(!wil)return;if(!out[wil])out[wil]={count:0,labs:[]};out[wil].count+=n;if(lab)out[wil].labs.push(lab+(n>1?` (${n})`:""))});return out}
+function exportSummary(byWilaya){const rows=[["Wilaya","Total Machines","Labs"]];Object.entries(byWilaya).forEach(([w,v])=>{rows.push([w,String(v.count),v.labs.join(" | ")])});const csv=rows.map(r=>r.map(x=>`"{String(x).replace(/"/g,'""')}"`).join(",")).join("\\n");const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="Synthese_Installations_CLIA_Par_Wilaya.csv";document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url)}
+function initMap(){const map=L.map("map",{minZoom:4,maxZoom:12}).setView([28,2.5],4.5);L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",{attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',maxZoom:19}).addTo(map);return map}
+function fit(map,layer){try{map.fitBounds(layer.getBounds(),{padding:[20,20]})}catch(e){}}
+
+(async function main(){
+  const loading=document.getElementById("loading");
+  const map=initMap();
+  document.getElementById("btnReset").addEventListener("click",()=>map.setView([28,2.5],4.5));
+
+  const url=CSV_URL+(CSV_URL.includes("?")?"&":"?")+"_ts="+Date.now();
+  const installs=await new Promise(res=>Papa.parse(url,{download:true,header:true,complete:r=>res(r.data||[]),error:()=>res([])}));
+  const byWilayaRaw=aggregate(installs);
+
+  let gjUrl="";try{const meta=await fetch(GEOB_API).then(r=>r.json());gjUrl=meta&&meta[0]&&(meta[0].gjDownloadURL||meta.gjDownloadURL||"")}catch(e){}
+  if(!gjUrl) gjUrl="https://raw.githubusercontent.com/fr33dz/Algeria-geojson/master/all-wilayas.geojson";
+
+  const gj=await fetch(gjUrl).then(r=>r.json());
+  const nameField=(function(f){const p=f&&f.properties||{};for(const c of ["shapeName","NAME_1","name","nom","wilaya","NAME","Name"])if(c in p)return c;return Object.keys(p)[0]})(gj.features&&gj.features[0]);
+  const allNames=(gj.features||[]).map(f=>f.properties[nameField]);
+  const byWilaya={};
+  function mapName(t){const T=normalizeName(t);for(const n of allNames){if(aliasMatch(T,n)||normalizeName(n)===T)return n}for(const n of allNames){const nn=normalizeName(n);if(T.includes(nn)||nn.includes(T))return n}return t}
+  Object.keys(byWilayaRaw).forEach(k=>{const m=mapName(k);byWilaya[m]=byWilaya[m]||{count:0,labs:[]};byWilaya[m].count+=byWilayaRaw[k].count;byWilaya[m].labs.push(...byWilayaRaw[k].labs)});
+
+  const layer=L.geoJSON(gj,{
+    style:f=>{const w=f.properties[nameField];const v=(byWilaya[w]&&byWilaya[w].count)||0;return{color:"#fff",weight:1,fillOpacity:.85,fillColor:colorFor(v)}},
+    onEachFeature:(feature,layer)=>{
+      const w=feature.properties[nameField];const info=byWilaya[w]||{count:0,labs:[]};const c=info.count||0;const labs=info.labs||[];
+      const labsHtml=labs.length?("<div class='labs-list'><ul>"+labs.map(l=>`<li>${l}</li>`).join("")+"</ul></div>"):"<div class='footnote'>Aucune installation enregistrée</div>";
+      const html = `<div class="popup"><div class="popup-header">${w} — <strong>${c}</strong> machine${c>1?"s":""}</div>${labsHtml}<div class="footnote">Frontières: geoBoundaries (ADM1).</div></div>`;
+      layer.on("click",()=>layer.bindPopup(html,{maxWidth:360}).openPopup());
+      layer.on("mouseover",()=>layer.setStyle({weight:2,color:"#999"}));
+      layer.on("mouseout",()=>layer.setStyle({weight:1,color:"#fff"}));
+    }
+  }).addTo(map);
+  fit(map,layer);
+
+  document.getElementById("btnExport").addEventListener("click",()=>exportSummary(byWilaya));
+  loading.style.display="none";
+})();
+</script>
+</body>
+</html>
